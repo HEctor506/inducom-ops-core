@@ -67,22 +67,19 @@ const API_OBJECT_PATH = {
 };
 
 /**
- * =========================
- * CONFIG LÓGICA 2: ASIGNACION FALLBACK LINK TO DEAL
- * =========================
+ * ===================================================================
+ *                  -------- CRM ESSENTIALS --------
+ * ===================================================================
  */
-
-const DEAL_PAID_LINK_PAYPAL_PROPERTY = "paid_link_paypal";
-const LINK_FALLBACK_PAYPAL_DEAL  = "https://www.grupo-inducom.com/pago-en-paypal/";
-
 
 /**
  * =========================
- * CONFIG LÓGICA 1: QUOTE STATUS CHANGE
+ * -------- QUOTES --------
  * =========================
  */
 
 const QUOTE_STATUS_PROPERTY = "hs_status";
+const DEAL_QUOTE_URL_PROPERTY = "url_cotizacion";
 
 const QUOTE_PROPERTIES = [
   "hs_title",
@@ -96,33 +93,18 @@ const QUOTE_PROPERTIES = [
   "hs_slug",
 ];
 
-const DEAL_QUOTE_URL_PROPERTY = "url_cotizacion";
-const DEAL_ID_NEGOCIO_PROPERTY = "id_negocio";
-
-
 
 /**
  * =========================
- * CONFIG LÓGICA 3: QUOTE STATUS CHANGE
+ * -------- DEALS --------
  * =========================
  */
 
-// const QUOTE_STATUS_PROPERTY = "hs_status";
+const DEAL_ID_NEGOCIO_PROPERTY = "id_negocio";
+const DEAL_PAID_LINK_PAYPAL_PROPERTY = "paid_link_paypal";
+const LINK_FALLBACK_PAYPAL_DEAL  = "https://www.grupo-inducom.com/pago-en-paypal/";
 
-// const QUOTE_PROPERTIES = [
-//   "hs_title",
-//   "hs_expiration_date",
-//   "hs_status",
-//   "hs_last_published_date",
-//   "hs_public_url_key",
-//   "hs_pdf_download_link",
-//   "hs_quote_number",
-//   "hs_quote_link",
-//   "hs_slug",
-// ];
 
-// const DEAL_QUOTE_URL_PROPERTY = "url_cotizacion";
-// const DEAL_ID_NEGOCIO_PROPERTY = "id_negocio";
 
 
 /**
