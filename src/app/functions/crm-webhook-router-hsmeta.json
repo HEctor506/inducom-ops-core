@@ -1,0 +1,12 @@
+{
+  "uid": "crm_webhook_router_endpoint",
+  "type": "app-function",
+  "config": {
+    "entrypoint": "/app/functions/crm-webhook-router.js",
+    "endpoint": {
+      "path": "crm-webhook-router",
+      "methods": ["POST"]
+    },
+    "secretKeys": []
+  }
+}

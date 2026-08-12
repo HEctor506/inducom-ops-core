@@ -1,0 +1,66 @@
+{
+  "uid": "inducom_ops_core_webhooks",
+  "type": "webhooks",
+  "config": {
+    "settings": {
+      "targetUrl": "https://marketing.grupo-inducom.com/hs/serverless/crm-webhook-router",
+      "maxConcurrentRequests": 10
+    },
+    "subscriptions": {
+      "crmObjects": [
+        {
+          "subscriptionType": "object.creation",
+          "objectType": "contact",
+          "active": false
+        },
+        {
+          "subscriptionType": "object.propertyChange",
+          "objectType": "contact",
+          "propertyName": "firstname",
+          "active": false
+        },
+        {
+          "subscriptionType": "object.propertyChange",
+          "objectType": "deal",
+          "propertyName": "dealstage",
+          "active": false
+        },
+        {
+          "subscriptionType": "object.creation",
+          "objectType": "deal",
+          "active": true
+        },
+        {
+          "subscriptionType": "object.creation",
+          "objectType": "company",
+          "active": false
+        },
+        {
+          "subscriptionType": "object.propertyChange",
+          "objectType": "quote",
+          "propertyName": "hs_status",
+          "active": true
+        }
+      ],
+      "legacyCrmObjects": [
+        {
+          "subscriptionType": "contact.propertyChange",
+          "propertyName": "lastname",
+          "active": false
+        },
+        {
+          "subscriptionType": "contact.deletion",
+          "active": false
+        }
+
+
+      ],
+      "hubEvents": [
+        {
+          "subscriptionType": "contact.privacyDeletion",
+          "active": false
+        }
+      ]
+    }
+  }
+}
