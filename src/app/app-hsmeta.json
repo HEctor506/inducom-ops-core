@@ -22,6 +22,8 @@
 
         "crm.objects.quotes.read",
         "crm.objects.quotes.write",
+        "crm.objects.line_items.read",
+        "crm.objects.line_items.write",
         "files",
         "automation"
       ],

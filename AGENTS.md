@@ -181,3 +181,51 @@ IMPORTANT: IF THE 'HubSpotDev' MCP SERVER IS INSTALLED USE THE TOOLS BEFORE TRYI
 - When working with UI extensions, remember that `hubspot.fetch` requires HTTPS URLs in `permittedUrls.fetch`
 - Use `hs project dev` for iterative development of cards and settings pages
 - Use `local.json` to proxy API requests to a local backend during development
+
+---
+
+## Project: inducom-ops-core — crm-webhook-router
+
+Contexto acumulado de sesiones de trabajo sobre `src/app/functions/crm-webhook-router.js`, para poder retomar el proyecto desde otra computadora sin perder el hilo.
+
+### Por qué todo el código vive en un solo archivo
+`crm-webhook-router.js` es un `app-function`. Las serverless functions de HubSpot se empaquetan de forma aislada: **no pueden hacer `require()` de archivos hermanos locales**, ni siquiera del mismo directorio (falla en runtime con `Cannot find module`). Por eso todo el cliente HTTP, constantes y lógica de negocio están duplicados dentro de ese único archivo, en vez de importarse.
+
+- `src/app/functions/hubspot-client.js` existe pero es **código muerto** — nada lo puede importar por la razón de arriba. Se dejó como referencia de la limitación, no se usa.
+
+### Endpoint y trigger
+- Config: [crm-webhook-router-hsmeta.json](src/app/functions/crm-webhook-router-hsmeta.json) — `uid: crm_webhook_router_endpoint`, endpoint `POST /crm-webhook-router`.
+- `secretKeys` debe quedar **vacío (`[]`)**. `PRIVATE_APP_ACCESS_TOKEN` es un nombre reservado en HubSpot — declararlo en `secretKeys` rompe `hs project upload` con `"... is a reserved keyword and cannot be used"`. El token se inyecta igual como `process.env.PRIVATE_APP_ACCESS_TOKEN` sin necesidad de declararlo ahí.
+- Suscripciones activas en [webhooks-hsmeta.json](src/app/webhooks/webhooks-hsmeta.json): `object.creation` en `deal`, y `object.propertyChange` en `quote.hs_status`.
+
+### Router (`runModulesForEvent`)
+Recibe cada evento del payload de HubSpot (siempre llega como array, ver `parseBody`) y despacha por `objectType` + `subscriptionType` + `propertyName`:
+
+- **Lógica 1** (`processQuoteStatusChange`) y **Lógica 3** (`processQuoteStatusChangePaypal`) se disparan juntas con el mismo trigger: `quote` + `object.propertyChange` + `hs_status`.
+- **Lógica 2** (`processDealFallbackLinkAssignment`) se dispara con `deal` + `object.creation`.
+
+### Lógica 1 — Quote status change → actualizar deal
+Cuando cambia `quote.hs_status`: si no está en DRAFT, busca el deal asociado y, si el `dealname` no contiene ya el `hs_quote_number`, actualiza `url_cotizacion`, `id_negocio` y `dealname`.
+
+### Lógica 2 — Fallback PayPal link en creación de deal
+Al crear un deal, le asigna `paid_link_paypal` = `LINK_FALLBACK_PAYPAL_DEAL` (link de pago genérico) como valor por defecto.
+
+### Lógica 3 — Quote status change → PayPal doorway (WF1)
+Es la más compleja, traducida de un flujo de n8n existente (usaba `httpRequest` nodes contra la API de HubSpot). Solo corre cuando `hs_status === APPROVAL_NOT_NEEDED`; para cualquier otro status, corta temprano sin tocar nada (`skipped_quote_is_approval_not_needed`).
+
+Cuando sí corre, en orden:
+1. `getQuote(quoteId)` → trae la cotización (`QUOTE_PROPERTIES`, incluye `hs_quote_amount` y `hs_currency`).
+2. `getDealAssociationForQuote(quoteId)` → deal asociado.
+3. En paralelo: `getDealProperties(dealId)` (con `DEAL_PROPERTIES`, incluye campos PayPal), `getCompanyAssociationForDeal`, `getContactAssociationForDeal`, `getLineItemAssociationToQuote(quoteId)`.
+4. `readBatchOfLineItems(lineItemIds)` con los `toObjectId` de las asociaciones de line items.
+5. **`calculateInducomQuoteFinancials`** (§11.3) — calcula subtotal/descuento/impuesto/total por line item. Soporta `hs_discount_percentage`/`hs_tax_rate` (%) o `discount`/`tax` (monto fijo). El impuesto se calcula sobre el neto (después de descuento).
+   - ⚠️ **PENDIENTE (§46-P1, sin resolver)**: confirmar contra la plantilla real de Inducom si el descuento se aplica antes o después del impuesto, y el redondeo exacto. Mientras no se confirme, si el total calculado no coincide con `hs_quote_amount`, la Lógica 3 corta con `TOTAL_MISMATCH` en cada cotización.
+6. **Validación cruzada** (§11.4) — si `|computed.total - hs_quote_amount| > 0.01`, corta: `sync_status = "ERROR"`, `last_error_code = "TOTAL_MISMATCH"`. No se crea orden, no se toca ningún link, no hay retry automático.
+7. **`buildNormalizedSnapshot`** (§11.5) — arma un objeto normalizado (schema_version 1) con `quote`, `economics`, `line_items` (ordenados por `sku+name`) y `metadata` (company/contact). `paypal_fee` queda fijo en `0` mientras `PAYPAL_FEE_ENABLED = false` (regla R11).
+8. **Fingerprints** (§12) — `paymentFingerprint` (hash de lo económico) y `metadataFingerprint` (hash de company/contacto) vía SHA-256 sobre un `stableStringify` (JSON con keys ordenadas). Están separados a propósito: un cambio de teléfono del contacto no debe disparar una orden PayPal nueva.
+9. **Notificación a n8n** — `notifyN8nFase1(payload)` hace `POST` (JSON) a `https://inducom.app.n8n.cloud/webhook/fase1` con todo lo recolectado (deal, company, contacts, line items, financials, snapshot, ambos fingerprints). Solo se dispara cuando el flujo llega a `completed`. Un fallo del POST se captura en `result.n8nNotification` y no rompe la respuesta al webhook de HubSpot.
+
+### Gotchas para recordar
+- No agregar nombres a `secretKeys` sin pedirlo explícitamente al usuario — `PRIVATE_APP_ACCESS_TOKEN` específicamente **nunca** va ahí (ver arriba).
+- `result.lineItems` (de `readBatchOfLineItems`) son objetos crudos de HubSpot (`{ id, properties: {...} }`), no objetos planos — todo cálculo sobre ellos debe leer `li.properties.*`.
+- Este archivo requiere `crypto` (módulo nativo de Node, no un archivo hermano) para los fingerprints — sí es válido usarlo, a diferencia de imports locales.
