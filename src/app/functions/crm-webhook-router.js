@@ -57,6 +57,25 @@ const hubspotRequest = async (path, options = {}) => {
 const N8N_FASE1_WEBHOOK_URL =
   "https://inducom.app.n8n.cloud/webhook/fase1";
 
+const N8N_PRUEBA1234_WEBHOOK_URL =
+  "https://inducom.app.n8n.cloud/webhook/prueba1234";
+
+const notifyN8nPrueba1234 = async (payload) => {
+  const response = await fetch(N8N_PRUEBA1234_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await response.text();
+
+  return {
+    ok: response.ok,
+    statusCode: response.status,
+    body: text || null,
+  };
+};
+
 /**
  * =========================
  * CONFIG GENERAL
@@ -90,6 +109,10 @@ const API_OBJECT_PATH = {
 
 const QUOTE_STATUS_PROPERTY = "hs_status";
 const DEAL_QUOTE_URL_PROPERTY = "url_cotizacion";
+
+//? Espera antes de leer la cotización, para dar tiempo a que HubSpot termine
+//? de procesar la publicación y devuelva los datos definitivos.
+const QUOTE_READ_DELAY_MS = 7000;
 
 const HS_STATUS = {
   DRAFT: "DRAFT",
@@ -186,6 +209,11 @@ const getEventPropertyName = (event) => {
   return String(event?.propertyName || event?.property || "");
 };
 
+const getEventPropertyValue = (event) => {
+  return String(event?.propertyValue ?? event?.value ?? "");
+};
+
+
 const getEventObjectType = (event) => {
   const rawType = String(
     event?.objectType ||
@@ -245,6 +273,10 @@ const escapeJsonString = (value) => {
 
 const cleanText = (value) => {
   return String(value || "").trim();
+};
+
+const wait = (ms) => {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 };
 
 const jsonResponse = (statusCode, body) => {
@@ -309,7 +341,7 @@ const updateDealFromQuote = async ({
     body: `{
       "properties": {
         "${DEAL_QUOTE_URL_PROPERTY}": "${escapeJsonString(quoteLink)}",
-        "${DEAL_ID_NEGOCIO_PROPERTY}": "EC${escapeJsonString(quoteNumber)}",
+        "${DEAL_ID_NEGOCIO_PROPERTY}": "EC ${escapeJsonString(quoteNumber)}",
         "dealname": "${escapeJsonString(newDealname)}"
       }
     }`,
@@ -317,13 +349,20 @@ const updateDealFromQuote = async ({
 };
 
 const buildDealNameFromQuote = ({ currentDealname, quoteNumber }) => {
-  const cleanDealname = cleanText(currentDealname)
-    .replace(/- \d+$/, "")
+  const cleanQuoteNumber = cleanText(quoteNumber)
     .replace(/['"]/g, "")
     .trim();
 
-  const cleanQuoteNumber = cleanText(quoteNumber)
-    .replace(/['"]/g, "")
+  let cleanDealname = cleanText(currentDealname).replace(/['"]/g, "");
+
+  //? Quitar el quoteNumber si ya está presente, para no duplicarlo al reejecutar.
+  if (cleanQuoteNumber) {
+    cleanDealname = cleanDealname.split(cleanQuoteNumber).join(" ");
+  }
+
+  cleanDealname = cleanDealname
+    .replace(/- \d+$/, "")
+    .replace(/\s+/g, " ")
     .trim();
 
   return `${cleanDealname} ${cleanQuoteNumber}`.trim();
@@ -343,11 +382,24 @@ const processQuoteStatusChange = async (quoteId) => {
     action: null,
   };
 
+  //? Esperar a que HubSpot termine de procesar la publicación de la cotización
+  //? antes de leerla, para traer los datos más actuales (hs_quote_number, links).
+  await wait(QUOTE_READ_DELAY_MS);
+
   const quote = await getQuoteForStatusChange(quoteId);
 
   const quoteStatus = quote?.properties?.hs_status || null;
   const quoteNumber = quote?.properties?.hs_quote_number || null;
   const quoteLink = quote?.properties?.hs_quote_link || null;
+
+  //?Comprobacion si coti fue publicada
+  if (quoteStatus !== HS_STATUS.APPROVAL_NOT_NEEDED) {
+    result.status = "skipped_quote_not_published";
+    result.action = "no_change";
+    return result; 
+    //no es necesario hacer nada si la cotizacion no esta publicada.
+  }
+
 
   result.quoteStatus = quoteStatus;
   result.quoteNumber = quoteNumber;
@@ -396,11 +448,11 @@ const processQuoteStatusChange = async (quoteId) => {
   result.previousDealname = currentDealname;
 
   //? Si el dealname ya contiene el quoteNumber, no hacer nada.
-  if (String(currentDealname).includes(String(quoteNumber))) {
-    result.status = "skipped_dealname_already_contains_quote_number";
-    result.action = "no_change";
-    return result;
-  }
+  // if (String(currentDealname).includes(String(quoteNumber))) {
+  //   result.status = "skipped_dealname_already_contains_quote_number";
+  //   result.action = "no_change";
+  //   return result;
+  // }
 
   //? Construir el nuevo dealname a partir del quoteNumber.
   const newDealname = buildDealNameFromQuote({
@@ -419,6 +471,17 @@ const processQuoteStatusChange = async (quoteId) => {
 
   result.status = "completed";
   result.action = "deal_updated_from_quote";
+
+  // //? Notificar a n8n (prueba1234) con el resultado final. Un fallo acá no debe
+  // //? tumbar la respuesta del webhook de HubSpot.
+  // try {
+  //   result.n8nPrueba1234Notification = await notifyN8nPrueba1234(result);
+  // } catch (error) {
+  //   result.n8nPrueba1234Notification = {
+  //     ok: false,
+  //     error: error.message || "Unexpected error notifying n8n.",
+  //   };
+  // }
 
   return result;
 };
@@ -498,7 +561,7 @@ const getQuote = async (quoteId) => {
 };
 
 const getDealAssociationForQuote = async (quoteId) => {
-  return await hubspotRequest(
+  return await hubspotRequest(  
     `/crm/v3/objects/quotes/${quoteId}/associations/deals`,
     { method: "GET" }
   );
@@ -906,17 +969,20 @@ const runModulesForEvent = async ({
   objectId,
   subscriptionType,
   propertyName,
+  propertyValue,
 }) => {
   const moduleResults = [];
 
   /**
    * LÓGICA 1:
    * PROPERTY CHANGE: quote.hs_status
+   ** PROPERTY CHANGE: quote.hs_status === APPROVAL_NOT_NEEDED
    */
   if (
     String(objectType).toLowerCase() === "quote" &&
     subscriptionType === "object.propertyChange" &&
-    propertyName === QUOTE_STATUS_PROPERTY
+    propertyName === QUOTE_STATUS_PROPERTY &&
+    String(propertyValue) === HS_STATUS.APPROVAL_NOT_NEEDED
   ) {
     moduleResults.push(
       await runModuleSafe("logic_1_quote_status_change", async () =>
@@ -930,8 +996,11 @@ const runModulesForEvent = async ({
       )
     );
 
+
     return moduleResults;
   }
+
+  
 
   /**
    * LÓGICA 2:
@@ -959,6 +1028,7 @@ const runModulesForEvent = async ({
     objectId,
     subscriptionType,   
     propertyName,
+    propertyValue,
   });
 
   return moduleResults;
@@ -989,6 +1059,7 @@ exports.main = async (context) => {
       const objectType = getEventObjectType(event);
       const subscriptionType = getEventSubscriptionType(event);
       const propertyName = getEventPropertyName(event);
+      const propertyValue = getEventPropertyValue(event);
 
       if (!objectId) {
         results.push({
@@ -1004,6 +1075,7 @@ exports.main = async (context) => {
           objectType,
           subscriptionType,
           propertyName,
+          propertyValue,
           status: "skipped_unknown_object_type",
           event,
         });
@@ -1015,6 +1087,7 @@ exports.main = async (context) => {
         objectId,
         subscriptionType,
         propertyName,
+        propertyValue,
       });
 
       results.push({
@@ -1022,6 +1095,7 @@ exports.main = async (context) => {
         objectType,
         subscriptionType,
         propertyName,
+        propertyValue,
         routedBy: `objectType_${objectType}`,
         status: "completed",
         moduleResults,
